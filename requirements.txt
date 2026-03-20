@@ -1,0 +1,84 @@
+# BindingBias - Requirements
+# Combined requirements for all TTS bias research projects
+# The Binding Effect: Multi-Dimensional Gender Bias in Instruction TTS
+# Projects: VoxInstruct, PromptTTS++, Parler-TTS, Gender Detection
+
+# ============================================================
+# Core Scientific Computing
+# ============================================================
+numpy==1.26.4
+scipy
+pandas
+scikit-learn
+matplotlib
+
+# ============================================================
+# Deep Learning Framework
+# ============================================================
+# Install separately via setup.txt
+# torch==2.3.0
+# torchvision==0.18.0
+# torchaudio==2.3.0
+
+# ============================================================
+# Audio Processing
+# ============================================================
+soundfile
+pysptk
+pyworld
+vocos
+nnmnkwii
+
+# ============================================================
+# NLP & Transformers
+# ============================================================
+# transformers<4.46  # Install separately after fairseq
+sentencepiece
+protobuf
+g2p_en
+
+# ============================================================
+# Machine Learning Tools
+# ============================================================
+hydra-core>=1.2.0
+omegaconf>=2.2,<2.4
+antlr4-python3-runtime==4.9.*
+peft
+
+# ============================================================
+# Audio Analysis (audeering suite)
+# ============================================================
+audb
+audinterface
+audmetric
+audonnx
+audplot
+
+# ============================================================
+# Speech Recognition
+# ============================================================
+faster_whisper
+
+# ============================================================
+# Utilities
+# ============================================================
+tqdm
+joblib
+cython>=0.21.0
+numba>=0.55.0rc1
+tensorboard
+notebook
+Pillow
+
+# ============================================================
+# Web Interface
+# ============================================================
+gradio<=4.21.0
+
+# ============================================================
+# Special Installations (via pip with git)
+# Install these separately via setup.txt:
+# - fairseq: pip install git+https://github.com/facebookresearch/fairseq.git
+# - parler-tts: pip install git+https://github.com/huggingface/parler-tts.git
+# - encodec: pip install encodec
+# ============================================================

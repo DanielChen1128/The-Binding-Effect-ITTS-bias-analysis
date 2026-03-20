@@ -1,0 +1,73 @@
+#!/bin/bash
+
+# Script to run all TTS models on all description files
+# Usage: bash run_all_models.sh
+
+set -e  # Exit on error
+
+SCRIPT_DIR="/home/danielgy/ITTS"
+DESC_DIR="${SCRIPT_DIR}/descriptions"
+OUTPUT_BASE="/home/danielgy/local-data/daniel/ITTS_audios"
+
+# Find all JSON files in descriptions directory
+JSON_FILES=$(find "${DESC_DIR}" -name "*.json" -type f)
+
+if [ -z "$JSON_FILES" ]; then
+    echo "[ERROR] No JSON files found in ${DESC_DIR}"
+    exit 1
+fi
+
+echo "=========================================="
+echo "Starting TTS generation for all models"
+echo "=========================================="
+echo ""
+
+# Count total files
+TOTAL_FILES=$(echo "$JSON_FILES" | wc -l)
+echo "Found ${TOTAL_FILES} description file(s)"
+echo ""
+
+# Run models with BindingBias environment
+MODELS_COP=("parler-large" "parler-mini" "promptttspp")
+
+
+for json_file in $JSON_FILES; do
+    json_basename=$(basename "$json_file" .json)
+    echo "=========================================="
+    echo "Processing: ${json_basename}"
+    echo "=========================================="
+    echo ""
+    
+    # Run BindingBias models
+    for model in "${MODELS_COP[@]}"; do
+        echo "------------------------------------------"
+        echo "Model: ${model} | File: ${json_basename}"
+        echo "------------------------------------------"
+        
+        conda run -n BindingBias python "${SCRIPT_DIR}/generate_wav.py" \
+            --model "${model}" \
+            --json "${json_file}" \
+            --output "${OUTPUT_BASE}/${model}/${json_basename}" \
+            || echo "[WARNING] ${model} failed on ${json_basename}"
+        
+        echo ""
+    done
+    
+    # Run voxinstruct with voxinstruct environment
+    echo "------------------------------------------"
+    echo "Model: voxinstruct | File: ${json_basename}"
+    echo "------------------------------------------"
+    
+    conda run -n voxinstruct python "${SCRIPT_DIR}/generate_wav.py" \
+        --model voxinstruct \
+        --json "${json_file}" \
+        --output "${OUTPUT_BASE}/voxinstruct/${json_basename}" \
+        || echo "[WARNING] voxinstruct failed on ${json_basename}"
+    
+    echo ""
+done
+
+echo "=========================================="
+echo "All models completed!"
+echo "=========================================="
+echo "Output directory: ${OUTPUT_BASE}"
