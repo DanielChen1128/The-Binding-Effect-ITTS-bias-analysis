@@ -10,10 +10,10 @@ SCRIPT_DIR="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 DESC_DIR="${DESC_DIR:-${SCRIPT_DIR}/descriptions}"
 WAV_BASE="${WAV_BASE:-./ITTS_audios}"
 ANALYSIS_BASE="${ANALYSIS_BASE:-${SCRIPT_DIR}/analysis}"
+FAILURES=0
 
 # Define all models
-# MODELS=("parler-large" "parler-mini" "promptttspp" "voxinstruct")
-MODELS=("promptttspp" "voxinstruct")
+MODELS=("parler-large" "parler-mini" "promptttspp" "voxinstruct")
 # Find all JSON files in descriptions directory
 JSON_FILES=$(find "${DESC_DIR}" -name "*.json" -type f)
 
@@ -48,6 +48,7 @@ for model in "${MODELS[@]}"; do
         if [ ! -d "${wav_path}" ]; then
             echo "[WARNING] WAV directory not found: ${wav_path}"
             echo "          Skipping..."
+            FAILURES=$((FAILURES + 1))
             echo ""
             continue
         fi
@@ -57,6 +58,7 @@ for model in "${MODELS[@]}"; do
         if [ ${wav_count} -eq 0 ]; then
             echo "[WARNING] No WAV files found in: ${wav_path}"
             echo "          Skipping..."
+            FAILURES=$((FAILURES + 1))
             echo ""
             continue
         fi
@@ -68,11 +70,13 @@ for model in "${MODELS[@]}"; do
         echo "------------------------------------------"
         
         # Run gender analysis
-        conda run -n BindingBias python "${SCRIPT_DIR}/analyze_gender.py" \
+        if ! conda run -n BindingBias python "${SCRIPT_DIR}/analyze_gender.py" \
             --wav_path "${wav_path}" \
             --json "${json_file}" \
-            --output "${output_path}" \
-            || echo "[WARNING] Gender analysis failed for ${model}/${json_basename}"
+            --output "${output_path}"; then
+            echo "[ERROR] Gender analysis failed for ${model}/${json_basename}"
+            FAILURES=$((FAILURES + 1))
+        fi
         
         echo ""
     done
@@ -91,3 +95,7 @@ echo "  - By trait: ${ANALYSIS_BASE}/<model>/<dataset>/gender_by_trait.csv"
 echo "  - By keyword: ${ANALYSIS_BASE}/<model>/<dataset>/gender_by_keyword.csv"
 echo "  - Full results: ${ANALYSIS_BASE}/<model>/<dataset>/detection_results.csv"
 echo ""
+if [ "${FAILURES}" -ne 0 ]; then
+    echo "[ERROR] ${FAILURES} model/dataset analysis run(s) were incomplete"
+    exit 1
+fi

@@ -1,0 +1,18 @@
+{
+  "models": {
+    "parler-mini": {
+      "model_id": "parler-tts/parler-tts-mini-v1"
+    },
+    "parler-large": {
+      "model_id": "parler-tts/parler-tts-large-v1"
+    },
+    "promptttspp": {
+      "backend_path": "/path/to/PromptTTSpp",
+      "model_id": "/path/to/promptttspp/checkpoints"
+    },
+    "voxinstruct": {
+      "backend_path": "/path/to/VoxInstruct",
+      "model_id": "/path/to/voxinstruct/assets"
+    }
+  }
+}

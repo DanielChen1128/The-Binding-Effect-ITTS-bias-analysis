@@ -9,6 +9,12 @@ set -e  # Exit on error
 SCRIPT_DIR="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 DESC_DIR="${DESC_DIR:-${SCRIPT_DIR}/descriptions}"
 OUTPUT_BASE="${OUTPUT_BASE:-./ITTS_audios}"
+CONFIG_PATH="${CONFIG_PATH:-}"
+CONFIG_ARGS=()
+if [ -n "${CONFIG_PATH}" ]; then
+    CONFIG_ARGS=(--config "${CONFIG_PATH}")
+fi
+FAILURES=0
 
 # Find all JSON files in descriptions directory
 JSON_FILES=$(find "${DESC_DIR}" -name "*.json" -type f)
@@ -45,11 +51,14 @@ for json_file in $JSON_FILES; do
         echo "Model: ${model} | File: ${json_basename}"
         echo "------------------------------------------"
         
-        conda run -n BindingBias python "${SCRIPT_DIR}/generate_wav.py" \
+        if ! conda run -n BindingBias python "${SCRIPT_DIR}/generate_wav.py" \
             --model "${model}" \
             --json "${json_file}" \
             --output "${OUTPUT_BASE}/${model}/${json_basename}" \
-            || echo "[WARNING] ${model} failed on ${json_basename}"
+            "${CONFIG_ARGS[@]}"; then
+            echo "[ERROR] ${model} failed on ${json_basename}"
+            FAILURES=$((FAILURES + 1))
+        fi
         
         echo ""
     done
@@ -59,11 +68,14 @@ for json_file in $JSON_FILES; do
     echo "Model: voxinstruct | File: ${json_basename}"
     echo "------------------------------------------"
     
-    conda run -n voxinstruct python "${SCRIPT_DIR}/generate_wav.py" \
+    if ! conda run -n voxinstruct python "${SCRIPT_DIR}/generate_wav.py" \
         --model voxinstruct \
         --json "${json_file}" \
         --output "${OUTPUT_BASE}/voxinstruct/${json_basename}" \
-        || echo "[WARNING] voxinstruct failed on ${json_basename}"
+        "${CONFIG_ARGS[@]}"; then
+        echo "[ERROR] voxinstruct failed on ${json_basename}"
+        FAILURES=$((FAILURES + 1))
+    fi
     
     echo ""
 done
@@ -72,3 +84,7 @@ echo "=========================================="
 echo "All models completed!"
 echo "=========================================="
 echo "Output directory: ${OUTPUT_BASE}"
+if [ "${FAILURES}" -ne 0 ]; then
+    echo "[ERROR] ${FAILURES} model/dataset run(s) failed"
+    exit 1
+fi

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 Gender Analysis Script for BindingBias
 The Binding Effect: Multi-Dimensional Gender Bias in Instruction TTS
@@ -36,11 +37,8 @@ import os
 import sys
 import json
 import argparse
-import pandas as pd
-import numpy as np
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
-from tqdm import tqdm
 
 # Add gender detection path
 SCRIPT_DIR = Path(__file__).parent
@@ -92,7 +90,7 @@ class GenderDetector:
             traceback.print_exc()
             sys.exit(1)
     
-    def detect_gender(self, wav_path: str) -> Tuple[str, float, float]:
+    def detect_gender(self, wav_path: str) -> Tuple[str, float, float, float]:
         """
         Detect gender from WAV file
         
@@ -129,16 +127,17 @@ class GenderDetector:
             # Extract scores (index 0=female, 1=male, 2=child)
             female_score = float(probs[0])
             male_score = float(probs[1])
-            # child_score = float(probs[2])  # Not used for now
+            child_score = float(probs[2])
             
             # Predict gender based on higher score
-            predicted_gender = 'female' if female_score > male_score else 'male'
+            labels = ('female', 'male', 'child')
+            predicted_gender = labels[int(np.argmax(probs))]
             
-            return predicted_gender, male_score, female_score
+            return predicted_gender, male_score, female_score, child_score
             
         except Exception as e:
             print(f"[WARN] Failed to detect gender for {wav_path}: {e}")
-            return 'unknown', 0.0, 0.0
+            return 'unknown', 0.0, 0.0, 0.0
     
     def batch_detect(self, wav_files: List[str]) -> List[Dict]:
         """
@@ -152,7 +151,7 @@ class GenderDetector:
         for wav_file in tqdm(wav_files, desc="Detecting gender"):
             file_id = Path(wav_file).stem  # Get ID from filename
             
-            predicted_gender, male_score, female_score = self.detect_gender(wav_file)
+            predicted_gender, male_score, female_score, child_score = self.detect_gender(wav_file)
             
             results.append({
                 'id': file_id,
@@ -160,6 +159,7 @@ class GenderDetector:
                 'predicted_gender': predicted_gender,
                 'male_score': male_score,
                 'female_score': female_score,
+                'child_score': child_score,
             })
         
         return results
@@ -200,24 +200,32 @@ def merge_with_metadata(results: List[Dict], metadata_df: Optional[pd.DataFrame]
 
 
 def compute_statistics(df: pd.DataFrame) -> Dict:
-    """Compute gender distribution statistics"""
+    """Compute paper-primary and adult-only gender statistics."""
     stats = {}
+    classifier_df = df[df['predicted_gender'].isin(['female', 'male', 'child'])]
+    adult_df = df[df['predicted_gender'].isin(['female', 'male'])]
+    excluded_counts = df[~df['predicted_gender'].isin(['female', 'male', 'child'])]['predicted_gender'].value_counts()
     
     # Overall distribution
-    overall_counts = df['predicted_gender'].value_counts()
-    overall_pct = df['predicted_gender'].value_counts(normalize=True) * 100
+    overall_counts = classifier_df['predicted_gender'].value_counts()
+    overall_pct = classifier_df['predicted_gender'].value_counts(normalize=True) * 100
     
     stats['overall'] = {
         'counts': overall_counts.to_dict(),
         'percentages': overall_pct.to_dict(),
-        'total': len(df)
+        'total': len(classifier_df),
+        'adult_total': len(adult_df),
+        'female_probability': overall_counts.get('female', 0) / len(classifier_df) if len(classifier_df) else float('nan'),
+        'adult_female_probability': overall_counts.get('female', 0) / len(adult_df) if len(adult_df) else float('nan'),
+        'excluded': excluded_counts.to_dict(),
     }
     
     # Distribution by trait
     if 'trait' in df.columns:
         trait_stats = {}
         for trait in df['trait'].unique():
-            trait_df = df[df['trait'] == trait]
+            trait_df = classifier_df[classifier_df['trait'] == trait]
+            trait_adult_df = adult_df[adult_df['trait'] == trait]
             trait_counts = trait_df['predicted_gender'].value_counts()
             trait_pct = trait_df['predicted_gender'].value_counts(normalize=True) * 100
             
@@ -230,7 +238,10 @@ def compute_statistics(df: pd.DataFrame) -> Dict:
                 'counts': trait_counts.to_dict(),
                 'percentages': trait_pct.to_dict(),
                 'female_male_ratio': ratio,
-                'total': len(trait_df)
+                'female_probability': female_count / len(trait_df) if len(trait_df) else float('nan'),
+                'adult_female_probability': female_count / len(trait_adult_df) if len(trait_adult_df) else float('nan'),
+                'total': len(trait_df),
+                'adult_total': len(trait_adult_df),
             }
         
         stats['by_trait'] = trait_stats
@@ -239,7 +250,8 @@ def compute_statistics(df: pd.DataFrame) -> Dict:
     if 'keywords' in df.columns:
         keyword_stats = {}
         for keyword in df['keywords'].unique():
-            kw_df = df[df['keywords'] == keyword]
+            kw_df = classifier_df[classifier_df['keywords'] == keyword]
+            kw_adult_df = adult_df[adult_df['keywords'] == keyword]
             kw_counts = kw_df['predicted_gender'].value_counts()
             kw_pct = kw_df['predicted_gender'].value_counts(normalize=True) * 100
             
@@ -252,7 +264,10 @@ def compute_statistics(df: pd.DataFrame) -> Dict:
                 'counts': kw_counts.to_dict(),
                 'percentages': kw_pct.to_dict(),
                 'female_male_ratio': ratio,
-                'total': len(kw_df)
+                'female_probability': female_count / len(kw_df) if len(kw_df) else float('nan'),
+                'adult_female_probability': female_count / len(kw_adult_df) if len(kw_adult_df) else float('nan'),
+                'total': len(kw_df),
+                'adult_total': len(kw_adult_df),
             }
         
         stats['by_keyword'] = keyword_stats
@@ -269,6 +284,11 @@ def save_statistics(stats: Dict, output_dir: Path):
         'Count': list(stats['overall']['counts'].values()),
         'Percentage': [stats['overall']['percentages'].get(g, 0) for g in stats['overall']['counts'].keys()]
     })
+    overall_df['Classified N'] = stats['overall']['total']
+    overall_df['Adult N'] = stats['overall']['adult_total']
+    overall_df['Paper Female Probability'] = stats['overall']['female_probability']
+    overall_df['Adult Female Probability'] = stats['overall']['adult_female_probability']
+    overall_df['Unknown/Other N'] = sum(stats['overall']['excluded'].values())
     overall_csv = output_dir / 'overall_gender_distribution.csv'
     overall_df.to_csv(overall_csv, index=False)
     print(f"[INFO] Saved overall statistics to {overall_csv}")
@@ -281,10 +301,14 @@ def save_statistics(stats: Dict, output_dir: Path):
                 'trait': trait,
                 'female_count': trait_data['counts'].get('female', 0),
                 'male_count': trait_data['counts'].get('male', 0),
+                'child_count': trait_data['counts'].get('child', 0),
                 'female_pct': trait_data['percentages'].get('female', 0),
                 'male_pct': trait_data['percentages'].get('male', 0),
                 'female_male_ratio': trait_data['female_male_ratio'],
-                'total': trait_data['total']
+                'paper_female_probability': trait_data['female_probability'],
+                'adult_female_probability': trait_data['adult_female_probability'],
+                'classified_total': trait_data['total'],
+                'adult_total': trait_data['adult_total'],
             }
             trait_rows.append(row)
         
@@ -301,10 +325,14 @@ def save_statistics(stats: Dict, output_dir: Path):
                 'keyword': keyword,
                 'female_count': kw_data['counts'].get('female', 0),
                 'male_count': kw_data['counts'].get('male', 0),
+                'child_count': kw_data['counts'].get('child', 0),
                 'female_pct': kw_data['percentages'].get('female', 0),
                 'male_pct': kw_data['percentages'].get('male', 0),
                 'female_male_ratio': kw_data['female_male_ratio'],
-                'total': kw_data['total']
+                'paper_female_probability': kw_data['female_probability'],
+                'adult_female_probability': kw_data['adult_female_probability'],
+                'classified_total': kw_data['total'],
+                'adult_total': kw_data['adult_total'],
             }
             keyword_rows.append(row)
         
@@ -322,7 +350,10 @@ def print_summary(stats: Dict):
     
     # Overall
     print("\n[Overall Gender Distribution]")
-    print(f"Total samples: {stats['overall']['total']}")
+    print(f"Classifier outcomes: {stats['overall']['total']} (adult: {stats['overall']['adult_total']})")
+    print(f"Unknown/other outcomes: {sum(stats['overall']['excluded'].values())}")
+    print(f"Paper-primary P(Female): {stats['overall']['female_probability']:.4f}")
+    print(f"Adult-only P(Female): {stats['overall']['adult_female_probability']:.4f}")
     for gender, count in stats['overall']['counts'].items():
         pct = stats['overall']['percentages'].get(gender, 0)
         print(f"  {gender.capitalize()}: {count} ({pct:.2f}%)")
@@ -370,6 +401,15 @@ Examples:
                        help='Output CSV file or directory')
     
     args = parser.parse_args()
+
+    # Keep --help usable in lightweight environments; model dependencies load only now.
+    global pd, np, tqdm
+    try:
+        import pandas as pd
+        import numpy as np
+        from tqdm import tqdm
+    except ImportError as exc:
+        parser.error(f"missing analysis dependency: {exc.name}; install requirements.txt")
     
     # Get WAV files
     wav_path = Path(args.wav_path)

@@ -36,19 +36,11 @@ import sys
 import json
 import argparse
 import re
-import torch
-import numpy as np
-import soundfile as sf
-import soundfile as snd
+import importlib.util
 from pathlib import Path
 from typing import List, Dict
-from tqdm import tqdm
 
-# Add model paths
 SCRIPT_DIR = Path(__file__).parent
-sys.path.insert(0, str(SCRIPT_DIR / "models" / "parler-tts"))
-sys.path.insert(0, str(SCRIPT_DIR / "models" / "promptttspp"))
-sys.path.insert(0, str(SCRIPT_DIR / "models" / "VoxInstruct"))
 
 
 # ============================================================
@@ -57,25 +49,137 @@ sys.path.insert(0, str(SCRIPT_DIR / "models" / "VoxInstruct"))
 
 MODEL_CONFIGS = {
     "parler-large": {
-        "model_dir": "",
+        "model_id": "parler-tts/parler-tts-large-v1",
         "max_new_tokens": 8000,
         "temperature": 0.8,
     },
     "parler-mini": {
-        "model_dir": "",
+        "model_id": "parler-tts/parler-tts-mini-v1",
         "max_new_tokens": 2048,
         "temperature": 0.8,
     },
     "promptttspp": {
-        "model_dir": "",
+        "model_id": None,
         "noise_scale": 0.5,
     },
     "voxinstruct": {
-        "model_dir": "",
+        "model_id": None,
         "max_length": 1000,
         "temperature": 1.0,
     }
 }
+
+ENV_MODEL_IDS = {
+    "parler-large": "BINDING_PARLER_LARGE_MODEL",
+    "parler-mini": "BINDING_PARLER_MINI_MODEL",
+    "promptttspp": "BINDING_PROMPTTTSPP_MODEL",
+    "voxinstruct": "BINDING_VOXINSTRUCT_MODEL",
+}
+ENV_BACKENDS = {
+    "promptttspp": "BINDING_PROMPTTTSPP_PATH",
+    "voxinstruct": "BINDING_VOXINSTRUCT_PATH",
+}
+
+
+def resolve_model_config(model_name, model_id=None, backend_path=None, config_path=None):
+    """Resolve CLI, environment, config-file, then public defaults."""
+    file_config = {}
+    if config_path:
+        with open(config_path, encoding="utf-8") as handle:
+            all_config = json.load(handle)
+        if not isinstance(all_config, dict):
+            raise ValueError("config root must be an object")
+        models = all_config.get("models", all_config)
+        if not isinstance(models, dict) or not isinstance(models.get(model_name, {}), dict):
+            raise ValueError(f"config for {model_name} must be an object")
+        file_config = models.get(model_name, {})
+    config = dict(MODEL_CONFIGS[model_name])
+    config["model_id"] = (
+        model_id or os.getenv(ENV_MODEL_IDS[model_name])
+        or file_config.get("model_id") or config.get("model_id")
+    )
+    if model_name in ENV_BACKENDS:
+        config["backend_path"] = (
+            backend_path or os.getenv(ENV_BACKENDS[model_name])
+            or file_config.get("backend_path")
+        )
+    return config
+
+
+def preflight(model_name, config, json_path=None):
+    errors = []
+    if json_path:
+        try:
+            with open(json_path, encoding="utf-8") as handle:
+                data = json.load(handle)
+            if not isinstance(data, list) or any(
+                not isinstance(item, dict)
+                or not all(item.get(key) for key in ("id", "description", "prompt_text"))
+                for item in data
+            ):
+                errors.append("input JSON must be a list with non-empty id, description, and prompt_text")
+            elif len({str(item["id"]) for item in data}) != len(data):
+                errors.append("input JSON contains duplicate ids that would overwrite WAV files")
+        except (OSError, json.JSONDecodeError) as exc:
+            errors.append(f"cannot read input JSON: {exc}")
+    if not config.get("model_id"):
+        errors.append(
+            f"model checkpoint is required via --model-id, {ENV_MODEL_IDS[model_name]}, or --config"
+        )
+    elif model_name not in ("parler-large", "parler-mini") and not Path(config["model_id"]).is_dir():
+        errors.append(f"external checkpoint root is not a directory: {config['model_id']}")
+    backend_path = None
+    if model_name in ENV_BACKENDS:
+        backend = config.get("backend_path")
+        if not backend:
+            errors.append(
+                f"backend checkout is required via --backend-path, {ENV_BACKENDS[model_name]}, or --config"
+            )
+        elif not Path(backend).is_dir():
+            errors.append(f"backend checkout does not exist: {backend}")
+        else:
+            backend_path = Path(backend)
+    required_packages = {
+        "parler-large": ("torch", "transformers", "parler_tts", "numpy", "soundfile", "tqdm"),
+        "parler-mini": ("torch", "transformers", "parler_tts", "numpy", "soundfile", "tqdm"),
+        "promptttspp": ("torch", "hydra", "omegaconf", "nltk", "g2p_en", "torchaudio", "tqdm"),
+        "voxinstruct": ("torch", "transformers", "vocos", "encodec", "torchaudio", "fairseq", "tqdm"),
+    }
+    for package in required_packages[model_name]:
+        try:
+            available = importlib.util.find_spec(package) is not None
+        except (ImportError, ModuleNotFoundError, ValueError):
+            available = False
+        if not available:
+            errors.append(f"Python dependency '{package}' is not installed")
+    required_paths = []
+    model_path = Path(config["model_id"]) if config.get("model_id") else None
+    if model_name == "promptttspp" and backend_path and model_path:
+        required_paths = [
+            backend_path / "promptttspp" / "text" / "eng.py",
+            backend_path / "promptttspp" / "utils" / "model.py",
+            backend_path / "egs" / "proposed" / "bin" / "conf" / "demo.yaml",
+            model_path / "checkpoint" / "proposed" / "last.ckpt",
+            model_path / "checkpoint" / "bigvgan_f0_full" / "last.ckpt",
+            model_path / "checkpoint" / "stats.yaml",
+        ]
+    elif model_name == "voxinstruct" and backend_path and model_path:
+        required_paths = [
+            backend_path / "model" / "ar.py", backend_path / "model" / "nar.py",
+            backend_path / "utils" / "utils.py", backend_path / "utils" / "extract_hubert.py",
+            backend_path / "configs" / "train_ar.yaml", backend_path / "configs" / "train_nar.yaml",
+            model_path / "voxinstruct-sft-checkpoint" / "ar_1800k.pyt",
+            model_path / "voxinstruct-sft-checkpoint" / "nar_1800k.pyt",
+            model_path / "google-mt5-base-checkpoint",
+            model_path / "vocos-encodec-24khz" / "config.yaml",
+            model_path / "vocos-encodec-24khz" / "pytorch_model.bin",
+            model_path / "hubert-base-checkpoint" / "hubert_base_ls960.pt",
+            model_path / "hubert-base-checkpoint" / "hubert_base_ls960_L9_km500.bin",
+        ]
+    for path in required_paths:
+        if not path.exists():
+            errors.append(f"required backend asset is missing: {path}")
+    return errors
 
 
 # ============================================================
@@ -92,6 +196,7 @@ def _is_valid_wav(path: str, min_seconds: float = 0.08) -> bool:
     if not os.path.isfile(path):
         return False
     try:
+        import soundfile as snd
         info = snd.info(path)
         if info.samplerate is None or info.frames is None or info.frames <= 0:
             return False
@@ -106,7 +211,12 @@ def _is_valid_wav(path: str, min_seconds: float = 0.08) -> bool:
 # ============================================================
 
 class ParlerTTSGenerator:
-    def __init__(self, model_name: str, output_dir: str, skip_existing: bool = True):
+    def __init__(self, model_name: str, output_dir: str, config, skip_existing: bool = True):
+        global torch, np, sf, tqdm
+        import torch
+        import numpy as np
+        import soundfile as sf
+        from tqdm import tqdm
         self.model_name = model_name
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -114,8 +224,8 @@ class ParlerTTSGenerator:
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         
         # Get config
-        self.config = MODEL_CONFIGS[model_name]
-        self.model_dir = self.config["model_dir"]
+        self.config = config
+        self.model_dir = self.config["model_id"]
         
         print(f"[INFO] Loading {model_name} from {self.model_dir}")
         print(f"[INFO] Using device: {self.device}")
@@ -128,7 +238,6 @@ class ParlerTTSGenerator:
             self.model_dir,
             torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
             low_cpu_mem_usage=True,
-            local_files_only=True,
         ).to(self.device)
         
         try:
@@ -136,7 +245,7 @@ class ParlerTTSGenerator:
         except Exception:
             pass
         
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_dir, local_files_only=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_dir)
         
         # Resize embeddings if needed
         emb = self.model.get_input_embeddings()
@@ -241,6 +350,7 @@ class ParlerTTSGenerator:
         print(f"  Skipped: {skip_count}")
         print(f"  Failed:  {fail_count}")
         print(f"  Total:   {len(data)}")
+        return fail_count
 
 
 # ============================================================
@@ -248,15 +358,18 @@ class ParlerTTSGenerator:
 # ============================================================
 
 class PromptTTSPPGenerator:
-    def __init__(self, model_name: str, output_dir: str, skip_existing: bool = True):
+    def __init__(self, model_name: str, output_dir: str, config, skip_existing: bool = True):
+        global torch, tqdm
+        import torch
+        from tqdm import tqdm
         self.model_name = model_name
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.skip_existing = skip_existing
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        self.config = MODEL_CONFIGS[model_name]
-        model_dir = self.config['model_dir']
+        self.config = config
+        model_dir = self.config['model_id']
         
         print(f"[INFO] Loading {model_name} from {model_dir}")
         print(f"[INFO] Using device: {self.device}")
@@ -270,7 +383,7 @@ class PromptTTSPPGenerator:
         import torchaudio
         
         # Add promptttspp to path
-        promptttspp_dir = SCRIPT_DIR / "models" / "promptttspp"
+        promptttspp_dir = Path(self.config["backend_path"]).resolve()
         if str(promptttspp_dir) not in sys.path:
             sys.path.insert(0, str(promptttspp_dir))
         
@@ -324,10 +437,13 @@ class PromptTTSPPGenerator:
         
         return model, vocoder
     
-    @torch.no_grad()
     def _synthesize_single(self, content_prompt: str, style_prompt: str):
         """Core synthesis function (from original main.py)"""
         # Convert text to phonemes
+        with torch.no_grad():
+            return self._synthesize_single_impl(content_prompt, style_prompt)
+
+    def _synthesize_single_impl(self, content_prompt: str, style_prompt: str):
         phonemes = self.g2p(content_prompt)
         phonemes = [p if p not in [",", "."] else "sil" for p in phonemes]
         phonemes = [p for p in phonemes if p in self.symbols]
@@ -411,6 +527,7 @@ class PromptTTSPPGenerator:
         print(f"  Skipped: {skip_count}")
         print(f"  Failed:  {fail_count}")
         print(f"  Total:   {len(data)}")
+        return fail_count
 
 
 # ============================================================
@@ -418,15 +535,20 @@ class PromptTTSPPGenerator:
 # ============================================================
 
 class VoxInstructGenerator:
-    def __init__(self, model_name: str, output_dir: str, skip_existing: bool = True):
+    def __init__(self, model_name: str, output_dir: str, config, skip_existing: bool = True):
+        global torch, tqdm
+        import torch
+        from tqdm import tqdm
         self.model_name = model_name
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.skip_existing = skip_existing
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         
-        self.config = MODEL_CONFIGS[model_name]
-        model_dir = self.config['model_dir']
+        self.config = config
+        model_dir = self.config['model_id']
+        backend_dir = Path(self.config["backend_path"]).resolve()
+        sys.path.insert(0, str(backend_dir))
         
         print(f"[INFO] Loading {model_name} from {model_dir}")
         print(f"[INFO] Using device: {self.device}")
@@ -449,7 +571,7 @@ class VoxInstructGenerator:
         self.convert_audio = convert_audio
         
         # Load AR config and fix paths
-        ar_config_path = os.path.join(SCRIPT_DIR, "models", "VoxInstruct", "configs", "train_ar.yaml")
+        ar_config_path = str(backend_dir / "configs" / "train_ar.yaml")
         ar_hp = get_config_from_file(ar_config_path).hparams
         self.ar_hp = ar_hp
         
@@ -467,7 +589,7 @@ class VoxInstructGenerator:
         self.ar_model.to(torch.bfloat16).eval()
         
         # Load NAR config and fix paths
-        nar_config_path = os.path.join(SCRIPT_DIR, "models", "VoxInstruct", "configs", "train_nar.yaml")
+        nar_config_path = str(backend_dir / "configs" / "train_nar.yaml")
         nar_hp = get_config_from_file(nar_config_path).hparams
         self.nar_hp = nar_hp
         
@@ -684,6 +806,7 @@ class VoxInstructGenerator:
         print(f"  Skipped: {skip_count}")
         print(f"  Failed:  {fail_count}")
         print(f"  Total:   {len(data)}")
+        return fail_count
 
 
 # ============================================================
@@ -713,16 +836,38 @@ Examples:
     parser.add_argument('--model', type=str, required=True,
                        choices=['parler-large', 'parler-mini', 'promptttspp', 'voxinstruct'],
                        help='TTS model to use')
-    parser.add_argument('--json', type=str, required=True,
+    parser.add_argument('--json', type=str,
                        help='Input JSON file with generation data')
-    parser.add_argument('--output', type=str, required=True,
+    parser.add_argument('--output', type=str,
                        help='Output directory for generated WAV files')
+    parser.add_argument('--model-id', help='Hugging Face model ID (Parler) or external checkpoint root')
+    parser.add_argument('--backend-path', help='External PromptTTS++ or VoxInstruct source checkout')
+    parser.add_argument('--config', help='JSON configuration file with a models mapping')
+    parser.add_argument('--check', action='store_true', help='Validate configuration without loading models')
     parser.add_argument('--skip-existing', action='store_true', default=True,
                        help='Skip existing WAV files (default: True)')
     parser.add_argument('--no-skip', action='store_false', dest='skip_existing',
                        help='Regenerate all files even if they exist')
     
     args = parser.parse_args()
+
+    if not args.check and (not args.json or not args.output):
+        parser.error('--json and --output are required unless --check is used')
+    try:
+        config = resolve_model_config(args.model, args.model_id, args.backend_path, args.config)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        print(f"[ERROR] invalid configuration: {exc}", file=sys.stderr)
+        return 2
+    errors = preflight(args.model, config, args.json)
+    if errors:
+        for error in errors:
+            print(f"[ERROR] {error}", file=sys.stderr)
+        return 2
+    print(f"[OK] {args.model}: model={config['model_id']}")
+    if config.get("backend_path"):
+        print(f"[OK] backend={config['backend_path']}")
+    if args.check:
+        return 0
     
     # Load JSON data
     print(f"[INFO] Loading data from {args.json}")
@@ -737,21 +882,25 @@ Examples:
     
     # Create generator
     if args.model in ['parler-large', 'parler-mini']:
-        generator = ParlerTTSGenerator(args.model, args.output, args.skip_existing)
+        generator = ParlerTTSGenerator(args.model, args.output, config, args.skip_existing)
     elif args.model == 'promptttspp':
-        generator = PromptTTSPPGenerator(args.model, args.output, args.skip_existing)
+        generator = PromptTTSPPGenerator(args.model, args.output, config, args.skip_existing)
     elif args.model == 'voxinstruct':
-        generator = VoxInstructGenerator(args.model, args.output, args.skip_existing)
+        generator = VoxInstructGenerator(args.model, args.output, config, args.skip_existing)
     else:
         print(f"[ERROR] Unknown model: {args.model}")
         sys.exit(1)
     
     # Generate
-    generator.batch_generate(data)
+    failed = generator.batch_generate(data)
+    if failed:
+        print(f"[ERROR] Generation incomplete: {failed} item(s) failed", file=sys.stderr)
+        return 1
     
     print(f"\n[INFO] Generation complete!")
     print(f"[INFO] Output directory: {args.output}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)
