@@ -5,10 +5,11 @@
 
 set -e  # Exit on error
 
-SCRIPT_DIR="/home/danielgy/ITTS"
-DESC_DIR="${SCRIPT_DIR}/descriptions"
-WAV_BASE="/home/danielgy/local-data/daniel/ITTS_audios"
-ANALYSIS_BASE="${SCRIPT_DIR}/analysis"
+# Paths can be overridden via environment variables; defaults resolve to this repo.
+SCRIPT_DIR="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+DESC_DIR="${DESC_DIR:-${SCRIPT_DIR}/descriptions}"
+WAV_BASE="${WAV_BASE:-./ITTS_audios}"
+ANALYSIS_BASE="${ANALYSIS_BASE:-${SCRIPT_DIR}/analysis}"
 
 echo "=========================================="
 echo "Starting Gender Analysis for experiments"

@@ -5,8 +5,9 @@
 
 set -e  # Exit on error
 
-SCRIPT_DIR="/home/danielgy/ITTS"
-OUTPUT_BASE="/home/danielgy/local-data/daniel/ITTS_audios"
+# Paths can be overridden via environment variables; defaults resolve to this repo.
+SCRIPT_DIR="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+OUTPUT_BASE="${OUTPUT_BASE:-./ITTS_audios}"
 
 echo "=========================================="
 echo "Starting TTS generation for experiments"

@@ -1,243 +1,191 @@
-# BindingBias: The Binding Effect in Instruction TTS
+# The Binding Effect: Multi-Dimensional Gender Bias in Instruction TTS
 
-An experimental platform for studying how multi-dimensional cues form gender bias in instruction-based TTS models, integrating multiple advanced TTS models and bias analysis tools.
+Code and prompt sets for the paper
+**"The Binding Effect: Analysis of How Multi-Dimensional Cues Form Gender Bias
+in Instruction TTS"** (Interspeech 2026).
 
-**Project Name**: BindingBias (The Binding Effect: Multi-Dimensional Gender Bias in Instruction TTS)
-**Paper**: *The Binding Effect: Analysis of How Multi-Dimensional Cues Form Gender Bias in Instruction TTS*
+Kuan-Yu Chen, Yi-Cheng Lin, Po-Chung Hsieh, Huang-Cheng Chou, Chih-Fan Hsu,
+Jeng-Lin Li, Hung-yi Lee, Jian-Jiun Ding
+National Taiwan University · AI Research Center, Inventec Corporation
 
-## 📌 Quick Start
-
-```bash
-# 1. Check installation status
-python test_installation.py
-
-# 2. Generate speech
-python generate_wav.py --model parler-large --json descriptions/descriptions_persona_bias.json --output results/test/
-
-# 3. Analyze gender
-python analyze_gender.py --wav_path results/test/ --json descriptions/descriptions_persona_bias.json --output analysis/test/
-```
-
-**Detailed Guide**: See [USAGE.md](USAGE.md) | **Project Summary**: [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md)
+[![arXiv](https://img.shields.io/badge/arXiv-2603.20743-b31b1b.svg)](https://arxiv.org/abs/2603.20743)
 
 ---
 
-## Environment Setup
+## Overview
 
-### Quick Start
+Bias evaluations in Instruction TTS (ITTS) usually test **one attribute at a
+time**, ignoring that real prompts combine many social cues. We model a prompt
+as a composition of three theoretically grounded axes and study how they
+interact to shape the perceived **gender** of synthesized speech:
+
+- **Social Status** — Weberian stratification, realized via Social Dominance
+  Orientation (SDO) descriptors (high / low status).
+- **Career** — socially structured occupational roles (female-/mixed-/male-leaning).
+- **Persona** — Big Five dispositional traits (Openness, Conscientiousness,
+  Extraversion, Agreeableness, Neuroticism).
+
+The **Binding Effect** is the phenomenon where these cues interact
+non-additively: e.g. a female-leaning occupation combined with high-status and
+a male-leaning persona can flip the perceived gender toward male. The framework
+quantifies this with an **interaction term** measured in log-odds space.
+
+**Research questions**
+
+- **RQ1** — How do compositional interactions among Social Status, Career, and
+  Persona modulate latent gender associations vs. univariate baselines?
+- **RQ2** — Which dimensions dominate acoustic gender realization, and do some
+  attributes systematically override others?
+- **RQ3** — Are the observed patterns consistent with the semantic priors of
+  pretrained text encoders, the training-data distributions, or both?
+
+The pipeline is **two-stage**: (1) measure univariate gender priors per
+descriptor, then (2) compose descriptors across axes and quantify the
+interaction term relative to the additive baseline. Gender is estimated with a
+wav2vec 2.0 age/gender classifier over 100 samples per prompt.
+
+## Evaluated ITTS models
+
+| Alias | Model | Backbone | Text encoder |
+|-------|-------|----------|--------------|
+| `voxinstruct` | VoxInstruct | LLaMA (AR + NAR) | mT5-base |
+| `promptttspp` | PromptTTS++ | Diffusion + MDN | BERT |
+| `parler-mini` | Parler-TTS Mini | AudioLM | Flan-T5-large |
+| `parler-large` | Parler-TTS Large | AudioLM | Flan-T5-large |
+
+## Repository contents
+
+```
+generate_wav.py        Unified TTS generation for the 4 model backends
+analyze_gender.py      Gender detection + bias statistics over generated WAVs
+descriptions/          Prompt sets (JSON) for each axis / composition
+  ├── descriptions_status_bias.json    Social Status (SDO)
+  ├── description_career_bias.json     Career / occupation
+  ├── descriptions_persona_bias.json   Persona (Big Five)
+  ├── descriptions_two_axis.json       Bi-dimensional compositions
+  └── descriptions_multi_axis.json     Tri-dimensional compositions
+run_all_models.sh / run_experiments.sh          Batch generation runners
+analyze_all_models.sh / analyze_experiments.sh  Batch analysis runners
+requirements.txt       Python dependencies
+setup.txt              Step-by-step environment setup
+```
+
+> **Not included (by design):** the TTS model backends and their checkpoints
+> (`models/`), and generated audio / analysis outputs. These are large and are
+> excluded via `.gitignore`. The TTS backends are installed separately (below);
+> the gender-detection model is auto-downloaded on first run.
+
+### Prompt (JSON) format
+
+Each entry pairs a style **description** with a neutral **prompt_text**:
+
+```json
+{
+  "id": "0001",
+  "description": "Speaks with imaginative phrasing and vivid curiosity...",
+  "trait": "Openness",
+  "keywords": "curious",
+  "prompt_text": "Hey, how are you doing today?"
+}
+```
+
+## Installation
+
+See [setup.txt](setup.txt) for the full walkthrough. In brief:
 
 ```bash
-# 1. Create and activate environment
 conda create -n BindingBias python=3.9.18 -y
 conda activate BindingBias
 
-# 2. Set CUDA environment variables (see setup.txt for details)
-
-
-# 3. Install PyTorch and dependencies
-pip install torch==2.3.0 torchvision==0.18.0 torchaudio==2.3.0 --index-url https://download.pytorch.org/whl/cu118
+# Point CUDA_HOME at your local CUDA 11.8 install (see setup.txt)
+pip install torch==2.3.0 torchvision==0.18.0 torchaudio==2.3.0 \
+    --index-url https://download.pytorch.org/whl/cu118
 pip install --upgrade pip==24.0
 pip install -r requirements.txt
-
-# 4. Install special packages
-pip install git+https://github.com/facebookresearch/fairseq.git
-pip install git+https://github.com/huggingface/parler-tts.git
-pip install encodec
 pip install 'transformers<4.46'
 ```
 
-**For detailed setup instructions, see**: [setup.txt](setup.txt)
+**TTS backends** are installed per model and may need separate environments:
 
-## Directory Structure
+- **Parler-TTS** — `pip install git+https://github.com/huggingface/parler-tts.git`
+- **PromptTTS++** — install from its official repository (provides the
+  `promptttspp` package used by `generate_wav.py`).
+- **VoxInstruct** — install from its official repository (provides the
+  `utils.utils` / `utils.extract_hubert` modules and `fairseq`). This model
+  typically runs in its own conda env (`voxinstruct`), as reflected in the
+  batch scripts.
 
-```
-ITTS/  (BindingBias)
-├── README.md                          # Project documentation
-├── requirements.txt                   # Python dependencies
-├── setup.txt                         # Environment setup guide
-│
-├── generate_wav.py                   # Unified WAV generation script ⭐
-├── analyze_gender.py                 # Gender analysis script ⭐
-├── utils.py                          # Utility functions
-│
-├── descriptions/                     # JSON description files (with IDs)
-│   ├── description_career_bias*.json         # Career bias data 
-│   ├── descriptions_multi_axis.json          # Multi-axis bias 
-│   ├── descriptions_persona_bias.json        # Personality trait bias 
-│   ├── descriptions_status_bias.json            # Social Status bias
-│   ├── descriptions_two_axis.json            # Two-axis bias 
-│
-├── models/                           # TTS model implementations
-│   ├── parler-tts/                  # Parler-TTS (large & mini)
-│   │   ├── run_exp.py              # Large model generation script
-│   │   └── run_exp_mini.py         # Mini model generation script
-│   ├── promptttspp/                 # PromptTTS++
-│   │   └── gen.py                  # Generation script
-│   └── VoxInstruct/                 # VoxInstruct
-│       └── inference.py            # Inference script
-│
-├── experiments/                      # Experimental tools
-│   └── gender_detect/               # Gender detection model
-│       └── (gender detection models)
-│
-└── results/                         # Output results
-    ├── parler_large/               # Parler Large WAV files
-    ├── parler_mini/                # Parler Mini WAV files
-    ├── promptttspp/                # PromptTTS++ WAV files
-    ├── voxinstruct/                # VoxInstruct WAV files
-    └── analysis/                   # Analysis CSV results
-```
+## Usage
 
-## Project Description
+### 1. Generate speech
 
-### TTS Models
-
-#### 1. Parler-TTS
-- **Path**: `models/parler-tts/`
-- **Description**: Multilingual TTS model based on natural language descriptions
-- **Features**: Supports multiple voice styles and languages
-- **Usage**: Generates natural speech from detailed style descriptions
-
-#### 2. PromptTTS++
--  **Path**: `models/promptttspp/`
-- **Description**: Advanced prompt-based TTS system
-- **Features**: Supports multi-dimensional control (emotion, age, gender, etc.)
-- **Usage**: Precise control of voice style and features using prompts
-
-#### 3. VoxInstruct
-- **Path**: `models/voxinstruct/`
-- **Description**: Instruction-driven speech synthesis model (based on fairseq)
-- **Features**: Controls synthesis through natural language instructions
-- **Usage**: Natural language instruction-based speech generation
-
-### Bias Research Datasets
-
-All JSON files contain the following standard fields:
-- `id`: Unique identifier (format: 0001, 0002, ...)
-- `description`: TTS prompt description
-- `trait`: Personality trait or bias type
-- `keywords`: Related keywords
-- `prompt_text`: Text to synthesize
-
-### Experimental Tools
-
-#### Gender Detection & Bias Analysis
-- **Path**: `experiments/gender_detect/`
-- **Features**:
-  - Analyze gender bias in TTS models
-  - Multi-axis analysis (gender, career, personality traits, etc.)
-  - Bias quantification and statistical analysis
-  - Bias mitigation method research
-
-### Utility Scripts
-
-#### 1. generate_wav.py ⭐ (Main Generation Script)
-
-Unified TTS speech generation script supporting 4 models:
-
-**Supported Models:**
-- `parler-large`: Parler-TTS Large model
-- `parler-mini`: Parler-TTS Mini model
-- `promptttspp`: PromptTTS++ (refer to models/promptttspp/gen.py)
-- `voxinstruct`: VoxInstruct (refer to models/VoxInstruct/inference.py)
-
-**Usage:**
 ```bash
-# Parler-TTS Large
 python generate_wav.py \
     --model parler-large \
     --json descriptions/descriptions_persona_bias.json \
     --output results/parler_large/
-
-# Parler-TTS Mini
-python generate_wav.py \
-    --model parler-mini \
-    --json descriptions/descriptions_multi_axis.json \
-    --output results/parler_mini/
-
-# VoxInstruct (use original script)
-cd models/VoxInstruct
-python inference.py
 ```
 
-**Parameters:**
-- `--model`: Model name (parler-large, parler-mini, promptttspp, voxinstruct)
-- `--json`: Input JSON file path
-- `--output`: Output WAV file directory
-- `--skip-existing`: Skip existing files (default)
-- `--no-skip`: Regenerate all files
+`--model` ∈ {`parler-large`, `parler-mini`, `promptttspp`, `voxinstruct`}.
+Output WAVs are named by id (`0001.wav`, `0002.wav`, …).
+Use `--no-skip` to regenerate existing files (default skips them).
 
-**Output Format:**
-- WAV files named by ID: 0001.wav, 0002.wav, 0003.wav, ...
+### 2. Analyze gender & bias
 
-#### 2. analyze_gender.py ⭐ (Gender Analysis Script)
-
-Analyzes generated WAV files, detects gender, and computes statistics.
-Calls the gender detection model from `experiments/gender_detect/`.
-
-**Usage:**
 ```bash
-# Analyze WAV files only
 python analyze_gender.py \
     --wav_path results/parler_large/ \
-    --output analysis/parler_large.csv
-
-# Analyze with JSON metadata
-python analyze_gender.py \
-    --wav_path results/parler_mini/ \
     --json descriptions/descriptions_persona_bias.json \
-    --output analysis/parler_mini/
-
-# Generate multiple statistics CSVs
-python analyze_gender.py \
-    --wav_path results/voxinstruct/ \
-    --json descriptions/descriptions_multi_axis.json \
-    --output analysis/voxinstruct/
+    --output analysis/parler_large/
 ```
 
-**Parameters:**
-- `--wav_path`: WAV file directory
-- `--json`: Original JSON file (optional, for matching trait and keywords)
-- `--output`: Output CSV file or directory
+When `--output` is a directory, this writes:
 
-**Output Files:**
+- `detection_results.csv` — per-utterance predictions (id, wav, predicted
+  gender, male/female scores, trait, keywords)
+- `overall_gender_distribution.csv` — overall female/male distribution
+- `gender_by_trait.csv` — female/male ratio per trait
+- `gender_by_keyword.csv` — female/male ratio per keyword
 
-If output is a single CSV file:
-- `detection_results.csv`: Complete detection results
+The gender detector uses an `audonnx` wav2vec 2.0 age/gender model that is
+downloaded and cached automatically on first use.
 
-If output is a directory, generates:
-- `detection_results.csv`: Complete detection results (id, wav_file, predicted_gender, male_score, female_score, trait, keywords)
-- `overall_gender_distribution.csv`: Overall gender distribution
-- `gender_by_trait.csv`: Gender distribution by trait and female/male ratio
-- `gender_by_keyword.csv`: Gender distribution by keyword and female/male ratio
+### Batch runners
 
-**統計指標：**
-- Female/Male count and percentage
-- Female/Male ratio per trait
-- Female/Male ratio per keyword
+```bash
+# Override paths via env vars if desired; defaults resolve to this repo.
+OUTPUT_BASE=./ITTS_audios bash run_all_models.sh      # generate for all models
+WAV_BASE=./ITTS_audios    bash analyze_all_models.sh  # analyze all models
+```
 
+`run_experiments.sh` / `analyze_experiments.sh` run a fixed set of
+per-model experiment files instead of every JSON in `descriptions/`.
 
 ## Dependencies
 
-### Core Framework
-- Python 3.9.18
-- PyTorch 2.3.0 (CUDA 11.8)
-- transformers <4.46
-- fairseq (from GitHub)
+Python 3.9, PyTorch 2.3 (CUDA 11.8), `transformers<4.46`, plus audio/analysis
+packages (`soundfile`, `pyworld`, `vocos`, `audonnx`, `audeer`, `pandas`,
+`scikit-learn`, `hydra-core`, `peft`, …). See [requirements.txt](requirements.txt)
+and [setup.txt](setup.txt) for the complete, version-pinned list.
 
-### Audio Processing
-- soundfile, pysptk, pyworld, vocos
-- audb, audinterface, audmetric, audonnx, audplot
-- nnmnkwii, faster_whisper
+## Citation
 
-### Machine Learning
-- numpy==1.26.4, scipy, pandas, scikit-learn
-- hydra-core, omegaconf, peft
-- tensorboard
+```bibtex
+@inproceedings{chen2026binding,
+  title     = {The Binding Effect: Analysis of How Multi-Dimensional Cues Form
+               Gender Bias in Instruction TTS},
+  author    = {Chen, Kuan-Yu and Lin, Yi-Cheng and Hsieh, Po-Chung and
+               Chou, Huang-Cheng and Hsu, Chih-Fan and Li, Jeng-Lin and
+               Lee, Hung-yi and Ding, Jian-Jiun},
+  booktitle = {Interspeech},
+  year      = {2026},
+  note      = {arXiv:2603.20743}
+}
+```
 
-### Others
-- parler-tts (from GitHub)
-- encodec, sentencepiece, protobuf
-- gradio, notebook
+## Responsible use
 
-For detailed list, see [requirements.txt](requirements.txt)
+This project studies gender bias to help **diagnose and mitigate** it. Gender is
+operationalized as a binary purely for tractable, macroscopic measurement; this
+is a modeling simplification, not a statement about gender identity. The prompt
+sets and analysis are intended for bias auditing and research only.

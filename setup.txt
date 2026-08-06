@@ -12,12 +12,13 @@ conda activate BindingBias
 # ============================================================
 # Step 2: Set CUDA Environment Variables
 # ============================================================
-export CUDA_HOME=/home/danielgy/chen-danielgy-workspace-babycry-pvc-4f3f5bf5-99ec-4609-be90-87c517c3f3dc/cuda-11.8
+# Point CUDA_HOME at your local CUDA 11.8 installation.
+export CUDA_HOME=/path/to/cuda-11.8
 export PATH=$CUDA_HOME/bin:$PATH
 export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 
 # Optionally add to ~/.bashrc for persistence:
-# echo 'export CUDA_HOME=/home/danielgy/chen-danielgy-workspace-babycry-pvc-4f3f5bf5-99ec-4609-be90-87c517c3f3dc/cuda-11.8' >> ~/.bashrc
+# echo 'export CUDA_HOME=/path/to/cuda-11.8' >> ~/.bashrc
 # echo 'export PATH=$CUDA_HOME/bin:$PATH' >> ~/.bashrc
 # echo 'export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
 
