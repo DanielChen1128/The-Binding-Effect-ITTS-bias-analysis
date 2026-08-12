@@ -10,6 +10,17 @@ from prompt_audit import audit_file, build_manifest
 
 
 class PromptAuditTests(unittest.TestCase):
+    def test_tracked_descriptions_are_canonical_stage1(self):
+        root = Path(__file__).parents[1]
+        manifest = build_manifest(root / "descriptions")
+        self.assertEqual(manifest["repository_total"], 6900)
+        self.assertEqual(manifest["missing_from_complete_protocol"], 6400)
+        self.assertTrue(manifest["canonical_stage1_alignment"])
+        self.assertEqual(
+            {Path(item["file"]).name for item in manifest["files"]},
+            {"description_career_bias.json", "descriptions_persona_bias.json", "descriptions_status_bias.json"},
+        )
+
     def test_valid_schema(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "prompts.json"
@@ -36,6 +47,18 @@ class PromptAuditTests(unittest.TestCase):
             self.assertFalse(manifest["paper_count_alignment"])
             self.assertEqual(manifest["count_mismatches"]["expected.json"], {"expected": 1, "actual": 2})
             self.assertFalse(manifest["exact_paper_reproduction_available"])
+
+    def test_canonical_alignment_rejects_changed_content_hash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "expected.json"
+            item = {"id": "1", "description": "voice", "trait": "status", "keywords": "high", "prompt_text": "hello"}
+            path.write_text(json.dumps([item]), encoding="utf-8")
+            with patch("prompt_audit.PAPER_EXPECTED", {"expected.json": 1}), \
+                    patch("prompt_audit.STAGE1_EXPECTED", {"expected.json": 1}), \
+                    patch("prompt_audit.CANONICAL_STAGE1_SHA256", {"expected.json": "different"}):
+                manifest = build_manifest(Path(directory))
+            self.assertFalse(manifest["canonical_stage1_hashes_match"])
+            self.assertFalse(manifest["canonical_stage1_alignment"])
 
     def test_reconstructed_status_cartesian_product(self):
         descriptors = [

@@ -14,6 +14,16 @@ PAPER_EXPECTED = {
     "descriptions_two_axis.json": 3200,
     "descriptions_multi_axis.json": 3200,
 }
+STAGE1_EXPECTED = {
+    "description_career_bias.json": 2700,
+    "descriptions_persona_bias.json": 4000,
+    "descriptions_status_bias.json": 200,
+}
+CANONICAL_STAGE1_SHA256 = {
+    "description_career_bias.json": "faffa2b10ce4cdc201054fe6470270028c2a9f373d5c9ba60fd521ff45ead1fd",
+    "descriptions_persona_bias.json": "ee973d75bc12118f0165a658c64d6ff77ea49561b5bbbd0383254381a067469f",
+    "descriptions_status_bias.json": "ff729a1bace361d8bed732a1d27ad58bd0646eaf270eaadd69670f86ed6f88b9",
+}
 REQUIRED_KEYS = {"id", "description", "trait", "keywords", "prompt_text"}
 RECONSTRUCTION_KEYS = {
     "axis", "descriptor_id", "template_id", "transcript_id", "cell_id", "seed", "provenance",
@@ -148,14 +158,26 @@ def build_manifest(description_dir):
     schema_valid = all(not item["errors"] for item in files)
     structure_valid = all(not item.get("protocol_errors") for item in files)
     count_alignment = not count_mismatches and not unexpected
+    stage1_files = [item for item in files if Path(item["file"]).name in STAGE1_EXPECTED]
+    stage1_count_alignment = all(actual.get(name) == expected for name, expected in STAGE1_EXPECTED.items())
+    stage1_structure_valid = all(not item["errors"] and not item.get("protocol_errors") for item in stage1_files)
+    stage1_alignment = stage1_count_alignment and stage1_structure_valid
+    actual_hashes = {Path(item["file"]).name: item["sha256"] for item in stage1_files}
+    canonical_hashes_match = actual_hashes == CANONICAL_STAGE1_SHA256
     # The paper provides counts but no reference hashes for identity checking.
     # Equal counts alone therefore cannot establish exact prompt reproduction.
     content_identity_verified = False
     return {
-        "schema_version": 3,
+        "schema_version": 5,
         "paper_expected_total": sum(PAPER_EXPECTED.values()),
+        "paper_stage1_expected_total": sum(STAGE1_EXPECTED.values()),
         "repository_total": sum(actual.values()),
-        "missing_human_verified_prompts": sum(missing.values()),
+        "missing_from_complete_protocol": sum(missing.values()),
+        "stage1_reconstruction_alignment": stage1_alignment,
+        "canonical_stage1_hashes_match": canonical_hashes_match,
+        "canonical_stage1_alignment": (
+            stage1_alignment and set(actual) == set(STAGE1_EXPECTED) and canonical_hashes_match
+        ),
         "paper_count_alignment": count_alignment,
         "reconstruction_protocol_alignment": count_alignment and schema_valid and structure_valid,
         "content_identity_verified": content_identity_verified,
@@ -172,6 +194,8 @@ def main():
     parser.add_argument("--descriptions", default="descriptions")
     parser.add_argument("--output", default="prompt_manifest.json")
     parser.add_argument("--strict-paper", action="store_true", help="Fail when original paper content identity is unverifiable")
+    parser.add_argument("--strict-stage1", action="store_true",
+                        help="Fail unless the canonical 6,900-prompt Stage 1 reconstruction aligns")
     parser.add_argument("--strict-reconstruction", action="store_true",
                         help="Fail unless reconstructed counts, metadata, and Cartesian structure align")
     args = parser.parse_args()
@@ -182,12 +206,15 @@ def main():
         json.dump(manifest, handle, indent=2)
         handle.write("\n")
     schema_errors = sum(bool(item["errors"]) for item in manifest["files"])
-    print(f"Audited {manifest['repository_total']} prompts; missing {manifest['missing_human_verified_prompts']} from paper protocol")
+    print(f"Audited {manifest['repository_total']} prompts; missing {manifest['missing_from_complete_protocol']} from complete protocol")
     if schema_errors:
         print(f"[ERROR] {schema_errors} files failed schema validation", file=sys.stderr)
         return 1
     if args.strict_paper and not manifest["exact_paper_reproduction_available"]:
         print("[ERROR] exact paper reproduction is unavailable", file=sys.stderr)
+        return 2
+    if args.strict_stage1 and not manifest["canonical_stage1_alignment"]:
+        print("[ERROR] canonical Stage 1 alignment failed", file=sys.stderr)
         return 2
     if args.strict_reconstruction and not manifest["reconstruction_protocol_alignment"]:
         print("[ERROR] reconstruction protocol alignment failed", file=sys.stderr)

@@ -49,11 +49,11 @@ Optional `semantic_bias.py` implements equation 7, the female-minus-male anchor 
 > **Prompt Availability & Reproduction Gap:**  
 > The prompt builder, generation, classifier, interaction-statistics, semantic-analysis, configuration preflight, and prompt-audit paths are runnable. Model weights, external TTS implementations, generated audio, paper outputs, and the full human-verified prompt collection are not bundled.
 > 
-> The paper specifies 13,300 prompts: 6,900 univariate and 6,400 compositional. The legacy `descriptions/` directory contains 5,900: 3,900 univariate and 2,000 compositional. The paper does not publish its literal templates, full descriptor list, human-verification records, ordering, or seeds, so exact reproduction remains unavailable.
+> The paper specifies 13,300 prompts per model: 6,900 Stage 1 univariate prompts and 6,400 model-specific Stage 2 compositional prompts. The canonical `descriptions/` directory now contains the complete 6,900-prompt Stage 1 reconstruction. Stage 2 must be built separately for each model after ranking that model's Stage 1 classifier results.
 >
-> `build_prompts.py` provides a clearly labeled, deterministic **paper-aligned reconstruction**. It recovers ten transcripts and candidate descriptors from the legacy files, makes the 40-persona subset and ten-template expansion explicit, and builds Stage 2 only after ranking the user's own Stage 1 classifier results. Structural alignment is reproducible; identity with the original paper stimuli is not claimed.
+> `build_prompts.py` provides a clearly labeled, deterministic **paper-aligned reconstruction**. The 40-persona subset, ten transcripts, ten-template expansion, seeds, and provenance are explicit. The paper does not publish its literal templates, full descriptor list, human-verification records, ordering, or seeds, so structural alignment is reproducible but identity with the original stimuli is not claimed.
 > 
-> The old `*_experiment.json` files referenced by the original experiment scripts are absent. Those scripts now state this and delegate to the actual files in `descriptions/` rather than silently skipping nonexistent inputs.
+> The original incomplete Stage 2 files are retained only under `examples/legacy_stage2/`. Batch scripts intentionally process root-level canonical Stage 1 files and do not treat those examples as experimental inputs.
 
 ---
 
@@ -68,17 +68,18 @@ Optional `semantic_bias.py` implements equation 7, the female-minus-male anchor 
 ├── binding_stats.py            # Dependency-free statistical core
 ├── semantic_bias.py            # Optional embedding Delta and Cohen's d
 ├── prompt_audit.py             # Prompt schema/count/hash audit
-├── prompt_manifest.json        # Audit of the legacy distributed prompts
+├── prompt_manifest.json        # Audit of the canonical Stage 1 prompts
 ├── model_config.example.json    # External model/source configuration example
 │
-├── descriptions/               # Available status, career, persona, bi-, and tri-axis JSON
+├── descriptions/               # Canonical 6,900-prompt Stage 1 reconstruction
+├── examples/legacy_stage2/     # Original incomplete Stage 2 examples
 ├── run_all_models.sh            # Generate every available JSON with all four models
 ├── analyze_all_models.sh        # Analyze every configured model and available JSON
 └── tests/                      # Offline synthetic statistics and schema tests
 
 ```
 
-Legacy prompt items have `id`, `description`, `trait`, `keywords`, and gender-neutral `prompt_text`. Reconstructed items additionally carry `axis`, `descriptor_id`, `template_id`, `transcript_id`, `cell_id`, `seed`, and `provenance`.
+Canonical prompt items have `id`, `description`, `trait`, `keywords`, and gender-neutral `prompt_text`, plus `axis`, `descriptor_id`, `template_id`, `transcript_id`, `cell_id`, `seed`, and `provenance` reconstruction metadata.
 
 ---
 
@@ -109,20 +110,18 @@ pip install -r requirements.txt
 
 ## 🚀 Usage
 
-### 1. Build Stage 1 Prompts
+### 1. Validate Canonical Stage 1
 
-Build the paper's `69 × 10 × 10 = 6,900` univariate design:
+The tracked `descriptions/` files contain the paper's `69 × 10 × 10 = 6,900` Stage 1 design:
 
 ```bash
-python build_prompts.py stage1 \
-  --source-dir descriptions \
-  --output-dir reconstructed_prompts/stage1
 python prompt_audit.py \
-  --descriptions reconstructed_prompts/stage1 \
-  --output reconstructed_prompts/stage1_manifest.json
+  --descriptions descriptions \
+  --output prompt_manifest.json \
+  --strict-stage1
 ```
 
-The Stage 1 directory intentionally lacks compositional files, so its full-protocol count audit remains incomplete.
+This validates 200 status, 2,700 career, and 4,000 persona prompts, including their schema, Cartesian structure, metadata, and canonical content hashes. The full 13,300 count remains intentionally incomplete until a model-specific Stage 2 is built.
 
 ### 2. Validate Model Preflight
 
@@ -139,10 +138,10 @@ python generate_wav.py --model promptttspp --config model_config.json --check
 ```bash
 python generate_wav.py --model parler-mini \
   --model-revision COMMIT_SHA \
-  --json reconstructed_prompts/stage1/descriptions_persona_bias.json \
+  --json descriptions/descriptions_persona_bias.json \
   --output ITTS_audios/parler-mini/stage1-persona
 python analyze_gender.py --wav_path ITTS_audios/parler-mini/stage1-persona \
-  --json reconstructed_prompts/stage1/descriptions_persona_bias.json \
+  --json descriptions/descriptions_persona_bias.json \
   --model-name parler-mini \
   --output analysis/parler-mini/stage1-persona
 
@@ -156,7 +155,7 @@ Stage 2 selects the two lowest and two highest career and persona female probabi
 
 ```bash
 python build_prompts.py stage2 \
-  --stage1-dir reconstructed_prompts/stage1 \
+  --stage1-dir descriptions \
   --detections \
     analysis/parler-mini/stage1-status/detection_results.csv \
     analysis/parler-mini/stage1-career/detection_results.csv \
@@ -201,6 +200,7 @@ Run the prompt audit and offline tests with no model or network:
 
 ```bash
 python prompt_audit.py --output prompt_manifest.json
+python prompt_audit.py --strict-stage1
 python prompt_audit.py --strict-paper  # always fails: original content identity is unverifiable
 python -m unittest discover -v
 

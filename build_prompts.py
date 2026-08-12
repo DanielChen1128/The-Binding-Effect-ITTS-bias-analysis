@@ -200,7 +200,7 @@ def build_stage1(source_dir, output_dir, base_seed):
         "paper_content_identity": False,
         "notes": [
             "The paper's literal templates, complete descriptors, ordering, and seeds are unavailable.",
-            "Ten transcripts and descriptor candidates were recovered from the repository's legacy files.",
+            "The canonical Stage 1 reconstruction originates from the repository's legacy files.",
             "The 40-persona subset and all added templates are explicit reconstruction choices.",
         ],
         "persona_keywords": PERSONA_KEYWORDS,
