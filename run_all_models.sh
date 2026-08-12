@@ -17,7 +17,7 @@ fi
 FAILURES=0
 
 # Find all JSON files in descriptions directory
-JSON_FILES=$(find "${DESC_DIR}" -name "*.json" -type f)
+JSON_FILES=$(find "${DESC_DIR}" -maxdepth 1 -name "*.json" -type f)
 
 if [ -z "$JSON_FILES" ]; then
     echo "[ERROR] No JSON files found in ${DESC_DIR}"

@@ -35,7 +35,9 @@ import os
 import sys
 import json
 import argparse
+import hashlib
 import re
+import random
 import importlib.util
 from pathlib import Path
 from typing import List, Dict
@@ -81,7 +83,7 @@ ENV_BACKENDS = {
 }
 
 
-def resolve_model_config(model_name, model_id=None, backend_path=None, config_path=None):
+def resolve_model_config(model_name, model_id=None, backend_path=None, config_path=None, model_revision=None):
     """Resolve CLI, environment, config-file, then public defaults."""
     file_config = {}
     if config_path:
@@ -103,6 +105,8 @@ def resolve_model_config(model_name, model_id=None, backend_path=None, config_pa
             backend_path or os.getenv(ENV_BACKENDS[model_name])
             or file_config.get("backend_path")
         )
+    if model_name in ("parler-large", "parler-mini"):
+        config["revision"] = model_revision or file_config.get("revision")
     return config
 
 
@@ -142,8 +146,8 @@ def preflight(model_name, config, json_path=None):
     required_packages = {
         "parler-large": ("torch", "transformers", "parler_tts", "numpy", "soundfile", "tqdm"),
         "parler-mini": ("torch", "transformers", "parler_tts", "numpy", "soundfile", "tqdm"),
-        "promptttspp": ("torch", "hydra", "omegaconf", "nltk", "g2p_en", "torchaudio", "tqdm"),
-        "voxinstruct": ("torch", "transformers", "vocos", "encodec", "torchaudio", "fairseq", "tqdm"),
+        "promptttspp": ("torch", "hydra", "omegaconf", "nltk", "g2p_en", "torchaudio", "numpy", "tqdm"),
+        "voxinstruct": ("torch", "transformers", "vocos", "encodec", "torchaudio", "fairseq", "numpy", "tqdm"),
     }
     for package in required_packages[model_name]:
         try:
@@ -206,6 +210,51 @@ def _is_valid_wav(path: str, min_seconds: float = 0.08) -> bool:
         return False
 
 
+def _seed_item(item: Dict) -> int:
+    """Seed stochastic backends from prompt metadata before one generation."""
+    seed = item.get("seed")
+    if seed is None:
+        serialized = json.dumps(item, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        seed = int.from_bytes(hashlib.sha256(serialized.encode("utf-8")).digest()[:4], "big")
+    seed = int(seed) % (2 ** 32)
+    import numpy as np
+    random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    return seed
+
+
+def _prepare_generation_manifest(output_dir, manifest, skip_existing, expected_wav_names=None):
+    """Reject stale WAV reuse, then record the active generation inputs."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = output_dir / "generation_manifest.json"
+    wav_names = {path.name for path in output_dir.glob("*.wav")}
+    expected_names = wav_names if expected_wav_names is None else set(expected_wav_names)
+    unexpected_wavs = wav_names - expected_names
+    if unexpected_wavs:
+        examples = ", ".join(sorted(unexpected_wavs)[:3])
+        raise ValueError(f"output contains WAVs outside the current prompt set: {examples}; use another directory")
+    wavs_exist = bool(wav_names)
+    if skip_existing and wavs_exist:
+        if not manifest_path.exists():
+            raise ValueError("output contains WAVs without generation_manifest.json; use --no-skip or another directory")
+        try:
+            existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"cannot validate existing generation manifest: {exc}") from exc
+        identity_keys = ("model", "model_id", "resolved_config", "input_sha256", "prompt_count")
+        mismatches = [key for key in identity_keys if existing.get(key) != manifest.get(key)]
+        if mismatches:
+            raise ValueError(f"existing WAV provenance differs in: {', '.join(mismatches)}; use --no-skip or another directory")
+    with open(manifest_path, "w", encoding="utf-8") as handle:
+        json.dump(manifest, handle, indent=2)
+        handle.write("\n")
+    return manifest_path
+
+
 # ============================================================
 # Parler-TTS Generator
 # ============================================================
@@ -233,11 +282,14 @@ class ParlerTTSGenerator:
         # Load model
         from parler_tts import ParlerTTSForConditionalGeneration
         from transformers import AutoTokenizer
+
+        revision_kwargs = {"revision": self.config["revision"]} if self.config.get("revision") else {}
         
         self.model = ParlerTTSForConditionalGeneration.from_pretrained(
             self.model_dir,
             torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
             low_cpu_mem_usage=True,
+            **revision_kwargs,
         ).to(self.device)
         
         try:
@@ -245,7 +297,7 @@ class ParlerTTSGenerator:
         except Exception:
             pass
         
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_dir)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_dir, **revision_kwargs)
         
         # Resize embeddings if needed
         emb = self.model.get_input_embeddings()
@@ -299,6 +351,7 @@ class ParlerTTSGenerator:
             return False
         
         try:
+            _seed_item(item)
             # Tokenize
             desc_ids, desc_attn = self.safe_tokenize(description, is_description=True)
             prompt_ids, prompt_attn = self.safe_tokenize(prompt_text, is_description=False)
@@ -489,6 +542,7 @@ class PromptTTSPPGenerator:
             return False
         
         try:
+            _seed_item(item)
             # Synthesize
             wav = self._synthesize_single(prompt_text, description)
             
@@ -664,6 +718,7 @@ class VoxInstructGenerator:
             return False
         
         try:
+            _seed_item(item)
             # Prepare text instruction
             text = f"{description}. \"{prompt_text}\""
             text = text.strip().capitalize()
@@ -841,6 +896,7 @@ Examples:
     parser.add_argument('--output', type=str,
                        help='Output directory for generated WAV files')
     parser.add_argument('--model-id', help='Hugging Face model ID (Parler) or external checkpoint root')
+    parser.add_argument('--model-revision', help='Immutable Hugging Face commit revision for Parler')
     parser.add_argument('--backend-path', help='External PromptTTS++ or VoxInstruct source checkout')
     parser.add_argument('--config', help='JSON configuration file with a models mapping')
     parser.add_argument('--check', action='store_true', help='Validate configuration without loading models')
@@ -854,7 +910,7 @@ Examples:
     if not args.check and (not args.json or not args.output):
         parser.error('--json and --output are required unless --check is used')
     try:
-        config = resolve_model_config(args.model, args.model_id, args.backend_path, args.config)
+        config = resolve_model_config(args.model, args.model_id, args.backend_path, args.config, args.model_revision)
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         print(f"[ERROR] invalid configuration: {exc}", file=sys.stderr)
         return 2
@@ -879,6 +935,27 @@ Examples:
         sys.exit(1)
     
     print(f"[INFO] Loaded {len(data)} items")
+    manifest = {
+        "schema_version": 1,
+        "model": args.model,
+        "model_id": config["model_id"],
+        "resolved_config": config,
+        "input_json": str(Path(args.json).resolve()),
+        "input_sha256": hashlib.sha256(Path(args.json).read_bytes()).hexdigest(),
+        "prompt_count": len(data),
+        "explicit_seed_count": sum(isinstance(item, dict) and "seed" in item for item in data),
+        "seed_strategy": "per-item metadata seed; canonical prompt hash fallback",
+        "status": "in_progress",
+        "failed_count": None,
+    }
+    try:
+        expected_wavs = {f"{item['id']}.wav" for item in data}
+        manifest_path = _prepare_generation_manifest(
+            args.output, manifest, args.skip_existing, expected_wav_names=expected_wavs,
+        )
+    except ValueError as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return 2
     
     # Create generator
     if args.model in ['parler-large', 'parler-mini']:
@@ -893,6 +970,11 @@ Examples:
     
     # Generate
     failed = generator.batch_generate(data)
+    manifest["status"] = "complete" if not failed else "incomplete"
+    manifest["failed_count"] = failed
+    with open(manifest_path, "w", encoding="utf-8") as handle:
+        json.dump(manifest, handle, indent=2)
+        handle.write("\n")
     if failed:
         print(f"[ERROR] Generation incomplete: {failed} item(s) failed", file=sys.stderr)
         return 1

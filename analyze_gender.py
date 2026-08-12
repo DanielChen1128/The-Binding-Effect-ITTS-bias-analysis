@@ -99,6 +99,7 @@ class GenderDetector:
         """
         try:
             import soundfile as sf
+            import numpy as np
             import torch
             import torch.nn.functional as F
             
@@ -181,16 +182,26 @@ def load_json_metadata(json_path: str) -> pd.DataFrame:
         print("[WARN] JSON does not have 'id' column, using index")
         df['id'] = [f"{i:04d}" for i in range(1, len(df) + 1)]
     
-    return df[['id', 'trait', 'keywords', 'description', 'prompt_text']]
+    if df['id'].astype(str).duplicated().any():
+        raise ValueError("JSON metadata contains duplicate ids")
+    df['id'] = df['id'].astype(str)
+    return df
 
 
-def merge_with_metadata(results: List[Dict], metadata_df: Optional[pd.DataFrame]) -> pd.DataFrame:
+def merge_with_metadata(results: List[Dict], metadata_df: Optional[pd.DataFrame], require_complete: bool = True) -> pd.DataFrame:
     """Merge detection results with metadata"""
     results_df = pd.DataFrame(results)
+    results_df['id'] = results_df['id'].astype(str)
     
     if metadata_df is not None:
+        result_ids = set(results_df['id'])
+        metadata_ids = set(metadata_df['id'])
+        if require_complete and result_ids != metadata_ids:
+            missing_wavs = len(metadata_ids - result_ids)
+            unknown_wavs = len(result_ids - metadata_ids)
+            raise ValueError(f"WAV/metadata ID mismatch: {missing_wavs} missing WAVs, {unknown_wavs} unknown WAVs")
         # Merge on 'id'
-        merged_df = results_df.merge(metadata_df, on='id', how='left')
+        merged_df = results_df.merge(metadata_df, on='id', how='left', validate='one_to_one')
     else:
         merged_df = results_df
         merged_df['trait'] = 'N/A'
@@ -399,6 +410,8 @@ Examples:
                        help='JSON file with metadata (optional)')
     parser.add_argument('--output', type=str, required=True,
                        help='Output CSV file or directory')
+    parser.add_argument('--model-name', help='Model label preserved in detection output')
+    parser.add_argument('--allow-partial', action='store_true', help='Allow WAV and metadata ID sets to differ')
     
     args = parser.parse_args()
 
@@ -439,7 +452,12 @@ Examples:
     results = detector.batch_detect([str(f) for f in wav_files])
     
     # Merge with metadata
-    df = merge_with_metadata(results, metadata_df)
+    try:
+        df = merge_with_metadata(results, metadata_df, require_complete=not args.allow_partial)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if args.model_name:
+        df['model_name'] = args.model_name
     
     # Determine output path
     output_path = Path(args.output)

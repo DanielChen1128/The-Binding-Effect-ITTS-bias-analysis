@@ -54,6 +54,7 @@ gen.py
 models/
 
 # Audio outputs
+ITTS_audios/
 outputs/**/*.wav
 outputs/**/*.mp3
 outputs/**/*.flac
@@ -69,6 +70,7 @@ outputs/**/*.flac
 
 # Experiment results
 results/
+reconstructed_prompts/
 wandb/
 
 # Data files (comment out if you want to track them)

@@ -1,9 +1,10 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "paper_expected_total": 13300,
   "repository_total": 5900,
   "missing_human_verified_prompts": 7400,
   "paper_count_alignment": false,
+  "reconstruction_protocol_alignment": false,
   "content_identity_verified": false,
   "exact_paper_reproduction_available": false,
   "missing_by_file": {
@@ -31,31 +32,56 @@
       "file": "descriptions/description_career_bias.json",
       "count": 2700,
       "sha256": "89f035079ef38d619cbb9414b55fbefa75e441590fe77be6a49dc7c4c483503f",
-      "errors": []
+      "duplicate_description_transcript_tuples": 1509,
+      "structure": null,
+      "errors": [],
+      "protocol_errors": [
+        "2700 items lack reconstruction metadata"
+      ]
     },
     {
       "file": "descriptions/descriptions_multi_axis.json",
       "count": 800,
       "sha256": "dc338e288b2b0223a12e3cb77b841d66d3c879e4a48cd4995f25050361cdb260",
-      "errors": []
+      "duplicate_description_transcript_tuples": 720,
+      "structure": null,
+      "errors": [],
+      "protocol_errors": [
+        "800 items lack reconstruction metadata"
+      ]
     },
     {
       "file": "descriptions/descriptions_persona_bias.json",
       "count": 1000,
       "sha256": "5cba5fdd33fd93ca642e760b24dbb94466059028f425c9322edabe898d23fda5",
-      "errors": []
+      "duplicate_description_transcript_tuples": 70,
+      "structure": null,
+      "errors": [],
+      "protocol_errors": [
+        "1000 items lack reconstruction metadata"
+      ]
     },
     {
       "file": "descriptions/descriptions_status_bias.json",
       "count": 200,
       "sha256": "d83fc2fbb6c0762de2de5f20fa91c2e96c381134fa35075ca6d140e74652c61b",
-      "errors": []
+      "duplicate_description_transcript_tuples": 180,
+      "structure": null,
+      "errors": [],
+      "protocol_errors": [
+        "200 items lack reconstruction metadata"
+      ]
     },
     {
       "file": "descriptions/descriptions_two_axis.json",
       "count": 1200,
       "sha256": "92bb498e2ae283c283c4b3deefdae16abfb4b6b822e37334d4574ae92838273e",
-      "errors": []
+      "duplicate_description_transcript_tuples": 1080,
+      "structure": null,
+      "errors": [],
+      "protocol_errors": [
+        "1200 items lack reconstruction metadata"
+      ]
     }
   ]
 }

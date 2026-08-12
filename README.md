@@ -47,9 +47,11 @@ Optional `semantic_bias.py` implements equation 7, the female-minus-male anchor 
 
 > [!IMPORTANT]
 > **Prompt Availability & Reproduction Gap:**  
-> The generation, classifier, interaction-statistics, semantic-analysis, configuration preflight, and prompt-audit paths are runnable. Model weights, external TTS implementations, generated audio, paper outputs, and the full human-verified prompt collection are not bundled.
+> The prompt builder, generation, classifier, interaction-statistics, semantic-analysis, configuration preflight, and prompt-audit paths are runnable. Model weights, external TTS implementations, generated audio, paper outputs, and the full human-verified prompt collection are not bundled.
 > 
-> The paper specifies 13,300 prompts: 6,900 univariate and 6,400 compositional. This repository contains 5,900: 3,900 univariate and 2,000 compositional. The absent 7,400 human-verified prompts are not reconstructed or fabricated, so exact paper reproduction is currently unavailable. `prompt_manifest.json` records exact per-file count mismatches, unexpected JSON files, hashes, and the shortfall. Because no authoritative paper prompt hashes were published, count equality alone would not assert content identity.
+> The paper specifies 13,300 prompts: 6,900 univariate and 6,400 compositional. The legacy `descriptions/` directory contains 5,900: 3,900 univariate and 2,000 compositional. The paper does not publish its literal templates, full descriptor list, human-verification records, ordering, or seeds, so exact reproduction remains unavailable.
+>
+> `build_prompts.py` provides a clearly labeled, deterministic **paper-aligned reconstruction**. It recovers ten transcripts and candidate descriptors from the legacy files, makes the 40-persona subset and ten-template expansion explicit, and builds Stage 2 only after ranking the user's own Stage 1 classifier results. Structural alignment is reproducible; identity with the original paper stimuli is not claimed.
 > 
 > The old `*_experiment.json` files referenced by the original experiment scripts are absent. Those scripts now state this and delegate to the actual files in `descriptions/` rather than silently skipping nonexistent inputs.
 
@@ -60,12 +62,13 @@ Optional `semantic_bias.py` implements equation 7, the female-minus-male anchor 
 ```text
 .
 ├── generate_wav.py             # Unified generation and model preflight
+├── build_prompts.py             # Deterministic two-stage protocol reconstruction
 ├── analyze_gender.py            # wav2vec 2.0 classifier and descriptive summaries
 ├── analyze_interactions.py      # Equations 5/6 and permutation significance
 ├── binding_stats.py            # Dependency-free statistical core
 ├── semantic_bias.py            # Optional embedding Delta and Cohen's d
 ├── prompt_audit.py             # Prompt schema/count/hash audit
-├── prompt_manifest.json        # Audit of the currently distributed prompts
+├── prompt_manifest.json        # Audit of the legacy distributed prompts
 ├── model_config.example.json    # External model/source configuration example
 │
 ├── descriptions/               # Available status, career, persona, bi-, and tri-axis JSON
@@ -75,13 +78,13 @@ Optional `semantic_bias.py` implements equation 7, the female-minus-male anchor 
 
 ```
 
-Each prompt item has `id`, `description`, `trait`, `keywords`, and gender-neutral `prompt_text` fields.
+Legacy prompt items have `id`, `description`, `trait`, `keywords`, and gender-neutral `prompt_text`. Reconstructed items additionally carry `axis`, `descriptor_id`, `template_id`, `transcript_id`, `cell_id`, `seed`, and `provenance`.
 
 ---
 
 ## 🛠️ Setup
 
-See [`setup.txt`](https://www.google.com/search?q=setup.txt). A minimal analysis setup is:
+See [`setup.txt`](setup.txt). A minimal analysis setup is:
 
 ```bash
 conda create -n BindingBias python=3.9 -y
@@ -99,14 +102,29 @@ pip install -r requirements.txt
 ## 📦 External Assets
 
 * **Parler-TTS:** Defaults to the public IDs `parler-tts/parler-tts-mini-v1` and `parler-tts/parler-tts-large-v1`. Install [Parler-TTS](https://github.com/huggingface/parler-tts); downloads follow Hugging Face cache settings.
-* **PromptTTS++ & VoxInstruct:** Require separately obtained official source checkouts and checkpoint assets. They are supported through `--backend-path` plus `--model-id`, environment variables shown by preflight errors, or [`model_config.example.json`](https://www.google.com/search?q=model_config.example.json). No weights are redistributed here.
+* **PromptTTS++ & VoxInstruct:** Require separately obtained official source checkouts and checkpoint assets. They are supported through `--backend-path` plus `--model-id`, environment variables shown by preflight errors, or [`model_config.example.json`](model_config.example.json). No weights are redistributed here.
 * **Classifier:** The acoustic classifier is AudEERING's [wav2vec2 age/gender model](https://zenodo.org/record/7761387) and downloads on first real analysis run.
 
 ---
 
 ## 🚀 Usage
 
-### 1. Validate Preflight
+### 1. Build Stage 1 Prompts
+
+Build the paper's `69 × 10 × 10 = 6,900` univariate design:
+
+```bash
+python build_prompts.py stage1 \
+  --source-dir descriptions \
+  --output-dir reconstructed_prompts/stage1
+python prompt_audit.py \
+  --descriptions reconstructed_prompts/stage1 \
+  --output reconstructed_prompts/stage1_manifest.json
+```
+
+The Stage 1 directory intentionally lacks compositional files, so its full-protocol count audit remains incomplete.
+
+### 2. Validate Model Preflight
 
 Validate without loading or downloading a model:
 
@@ -116,19 +134,44 @@ python generate_wav.py --model promptttspp --config model_config.json --check
 
 ```
 
-### 2. Generate and Classify Speech
+### 3. Generate and Classify Stage 1
 
 ```bash
 python generate_wav.py --model parler-mini \
-  --json descriptions/descriptions_persona_bias.json --output results/parler-mini/persona
-python analyze_gender.py --wav_path results/parler-mini/persona \
-  --json descriptions/descriptions_persona_bias.json --output analysis/parler-mini/persona
+  --model-revision COMMIT_SHA \
+  --json reconstructed_prompts/stage1/descriptions_persona_bias.json \
+  --output ITTS_audios/parler-mini/stage1-persona
+python analyze_gender.py --wav_path ITTS_audios/parler-mini/stage1-persona \
+  --json reconstructed_prompts/stage1/descriptions_persona_bias.json \
+  --model-name parler-mini \
+  --output analysis/parler-mini/stage1-persona
 
 ```
 
-Outputs include `detection_results.csv`, overall distribution, and trait/keyword summaries. Existing valid WAVs are skipped unless `--no-skip` is passed.
+Repeat generation and classification for status and career. Outputs preserve all protocol metadata, include `detection_results.csv`, and report trait/keyword summaries. Generation applies each row's deterministic seed and writes `generation_manifest.json`; pin Parler to a commit revision and use immutable local checkpoint directories. Backend and hardware differences can still prevent bitwise-identical audio. Existing valid WAVs are skipped unless `--no-skip` is passed.
 
-### 3. Analyze Interactions
+### 4. Build Model-Specific Stage 2
+
+Stage 2 selects the two lowest and two highest career and persona female probabilities from that model's Stage 1 results, then builds all 32 bi-axis and 32 tri-axis cells:
+
+```bash
+python build_prompts.py stage2 \
+  --stage1-dir reconstructed_prompts/stage1 \
+  --detections \
+    analysis/parler-mini/stage1-status/detection_results.csv \
+    analysis/parler-mini/stage1-career/detection_results.csv \
+    analysis/parler-mini/stage1-persona/detection_results.csv \
+  --model-name parler-mini \
+  --output-dir reconstructed_prompts/parler-mini
+python prompt_audit.py \
+  --descriptions reconstructed_prompts/parler-mini \
+  --output reconstructed_prompts/parler-mini_manifest.json \
+  --strict-reconstruction
+```
+
+The complete output contains 13,300 structurally aligned prompts plus `_protocol/stage2_selection.json`. `--strict-paper` still fails by design because no published hashes can establish original content identity.
+
+### 5. Analyze Interactions
 
 For interactions, provide a JSON spec whose order-2 entries contain exactly three conditions in `[joint, uni1, uni2]` order, or whose order-3 entries contain seven in `[triple, pair12, pair13, pair23, uni1, uni2, uni3]` order. Every condition has `name` and a `csv` path to classifier output:
 
@@ -138,7 +181,7 @@ python semantic_bias.py --spec semantic.json --output analysis/semantic.json
 
 ```
 
-### 4. Batch Execution
+### 6. Batch Execution
 
 Batch generation and analysis use all four configured models:
 
@@ -158,12 +201,12 @@ Run the prompt audit and offline tests with no model or network:
 
 ```bash
 python prompt_audit.py --output prompt_manifest.json
-python prompt_audit.py --strict-paper  # intentionally fails while 7,400 prompts are absent
+python prompt_audit.py --strict-paper  # always fails: original content identity is unverifiable
 python -m unittest discover -v
 
 ```
 
-The implementation aligns with paper equations 5-7, uses 10,000 constrained-null randomizations as documented above, validates complete named interaction condition sets, includes `child` as a non-female paper-primary classifier outcome, and reports adult-only and unknown outcomes separately. Reproducing paper tables additionally requires the missing human-verified prompts, original model/checkpoint versions, random samples, generated waveforms, classifier audit data, and the authors' exact permutation implementation; these are unresolved external blockers.
+The audit distinguishes schema validity, paper count/Cartesian alignment, and original-content identity. The implementation aligns with paper equations 5-7, uses 10,000 constrained-null randomizations as documented above, validates complete named interaction condition sets, includes `child` as a non-female paper-primary classifier outcome, and reports adult-only and unknown outcomes separately. Reproducing paper tables additionally requires the missing human-verified prompts, original model/checkpoint versions, generated waveforms, classifier audit data, and the authors' exact permutation implementation; these remain unresolved external blockers.
 
 ---
 

@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import generate_wav
-from generate_wav import ParlerTTSGenerator, preflight, resolve_model_config
+from generate_wav import ParlerTTSGenerator, _prepare_generation_manifest, _seed_item, preflight, resolve_model_config
 
 
 class GenerationConfigTests(unittest.TestCase):
@@ -23,6 +23,20 @@ class GenerationConfigTests(unittest.TestCase):
             with patch.dict(os.environ, {"BINDING_PARLER_MINI_MODEL": "environment"}):
                 config = resolve_model_config("parler-mini", model_id="cli", config_path=str(path))
         self.assertEqual(config["model_id"], "cli")
+
+    def test_parler_revision_is_resolved(self):
+        config = resolve_model_config("parler-mini", model_revision="commit-sha")
+        self.assertEqual(config["revision"], "commit-sha")
+
+    def test_prompt_hash_fallback_seed_is_content_specific(self):
+        fake_torch = Mock()
+        fake_torch.cuda.is_available.return_value = False
+        with patch.object(generate_wav, "torch", fake_torch, create=True):
+            first = _seed_item({"id": "1", "description": "calm", "prompt_text": "hello"})
+            repeated = _seed_item({"id": "1", "description": "calm", "prompt_text": "hello"})
+            changed = _seed_item({"id": "1", "description": "warm", "prompt_text": "hello"})
+        self.assertEqual(first, repeated)
+        self.assertNotEqual(first, changed)
 
     def test_preflight_reports_concrete_external_assets(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -62,6 +76,34 @@ class GenerationConfigTests(unittest.TestCase):
                     patch("generate_wav.ParlerTTSGenerator", return_value=generator):
                 result = generate_wav.main()
         self.assertEqual(result, 1)
+
+    def test_skip_rejects_wavs_without_matching_manifest(self):
+        manifest = {"model": "parler-mini", "model_id": "checkpoint", "input_sha256": "abc", "prompt_count": 1}
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            (output / "0001.wav").write_bytes(b"stale")
+            with self.assertRaisesRegex(ValueError, "without generation_manifest"):
+                _prepare_generation_manifest(output, manifest, skip_existing=True)
+
+    def test_skip_rejects_changed_input_provenance(self):
+        old = {"model": "parler-mini", "model_id": "checkpoint", "input_sha256": "old", "prompt_count": 1}
+        new = dict(old, input_sha256="new")
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            (output / "0001.wav").write_bytes(b"stale")
+            (output / "generation_manifest.json").write_text(json.dumps(old), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "input_sha256"):
+                _prepare_generation_manifest(output, new, skip_existing=True)
+
+    def test_rejects_wavs_outside_current_prompt_set(self):
+        manifest = {"model": "parler-mini"}
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            (output / "stale.wav").write_bytes(b"stale")
+            with self.assertRaisesRegex(ValueError, "outside the current prompt set"):
+                _prepare_generation_manifest(
+                    output, manifest, skip_existing=False, expected_wav_names={"current.wav"},
+                )
 
 
 if __name__ == "__main__":

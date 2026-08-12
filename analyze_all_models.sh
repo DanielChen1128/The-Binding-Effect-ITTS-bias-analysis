@@ -15,7 +15,7 @@ FAILURES=0
 # Define all models
 MODELS=("parler-large" "parler-mini" "promptttspp" "voxinstruct")
 # Find all JSON files in descriptions directory
-JSON_FILES=$(find "${DESC_DIR}" -name "*.json" -type f)
+JSON_FILES=$(find "${DESC_DIR}" -maxdepth 1 -name "*.json" -type f)
 
 if [ -z "$JSON_FILES" ]; then
     echo "[ERROR] No JSON files found in ${DESC_DIR}"
@@ -73,6 +73,7 @@ for model in "${MODELS[@]}"; do
         if ! conda run -n BindingBias python "${SCRIPT_DIR}/analyze_gender.py" \
             --wav_path "${wav_path}" \
             --json "${json_file}" \
+            --model-name "${model}" \
             --output "${output_path}"; then
             echo "[ERROR] Gender analysis failed for ${model}/${json_basename}"
             FAILURES=$((FAILURES + 1))
